@@ -20,8 +20,8 @@ env:
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  UPLOAD_BIN_DIR: false
-  UPLOAD_FIRMWARE: false
+  UPLOAD_BIN_DIR: true
+  UPLOAD_FIRMWARE: true
   UPLOAD_COWTRANSFER: false
   UPLOAD_WETRANSFER: false
   UPLOAD_RELEASE: true
@@ -135,19 +135,24 @@ jobs:
       id: package
       run: |
         cd openwrt
-        make defconfig  # 生成默认配置
-        make download -j8  # 下载依赖包
-        find dl -size -1024c -exec ls -l {} \;  # 检查并删除无效的小文件
+        make defconfig
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
-    
-    - name: Build toolchain and dependencies
+
+    - name: Build full firmware
+      id: build_firmware
       run: |
         cd openwrt
-        make toolchain/install -j$(nproc)  # 编译并安装工具链
-        make package/lua/compile -j$(nproc)  # 编译 lua，因为它是 LuCI 插件的依赖
-    
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "::set-output name=status::success"
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
     - name: Compile selected LuCI apps
-      id: compile
+      id: compile_luci
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
@@ -164,23 +169,31 @@ jobs:
           make package/$app/compile -j$(nproc) || make package/$app/compile -j1 || make package/$app/compile -j1 V=s
         done
         echo "::set-output name=status::success"
-    
+
+    - name: Upload firmware
+      uses: actions/upload-artifact@main
+      if: steps.build_firmware.outputs.status == 'success' && !cancelled()
+      with:
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: openwrt/bin/targets/*/*
+
     - name: Upload .ipk files
       uses: actions/upload-artifact@main
-      if: steps.compile.outputs.status == 'success' && !cancelled()
+      if: steps.compile_luci.outputs.status == 'success' && !cancelled()
       with:
         name: luci-apps
         path: openwrt/bin/packages/*/base/luci-app-*.ipk
 
     - name: Generate release tag
       id: tag
-      if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success' && !cancelled()
+      if: env.UPLOAD_RELEASE == 'true' && steps.build_firmware.outputs.status == 'success' && !cancelled()
       run: |
         touch release.txt
+        echo "🔗 [Firmware](https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}.tar.gz)" >> release.txt
         echo "🔗 [LuCI Apps](https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/luci-apps.zip)" >> release.txt
         echo "::set-output name=status::success"
         
-    - name: Upload .ipk to release
+    - name: Upload firmware and .ipk to release
       uses: softprops/action-gh-release@v1
       if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
@@ -188,7 +201,9 @@ jobs:
       with:
         tag_name: ${{ env.RELEASE_TAG }}
         body_path: release.txt
-        files: openwrt/bin/packages/*/base/luci-app-*.ipk
+        files: |
+          openwrt/bin/targets/*/*/OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}.tar.gz
+          openwrt/bin/packages/*/base/luci-app-*.ipk
 
     - name: Delete workflow runs
       uses: GitRML/delete-workflow-runs@main
