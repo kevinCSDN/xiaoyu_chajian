@@ -135,28 +135,22 @@ jobs:
       id: package
       run: |
         cd openwrt
-        make defconfig
-        make download -j8
-        find dl -size -1024c -exec ls -l {} \;
+        make defconfig  # 生成默认配置
+        make download -j8  # 下载依赖包
+        find dl -size -1024c -exec ls -l {} \;  # 检查并删除无效的小文件
         find dl -size -1024c -exec rm -f {} \;
-        
+    
     - name: Build toolchain and dependencies
       run: |
         cd openwrt
-        make defconfig
-        make toolchain/install -j$(nproc)
+        make toolchain/install -j$(nproc)  # 编译并安装工具链
         make package/lua/compile -j$(nproc)  # 编译 lua，因为它是 LuCI 插件的依赖
-        
+    
     - name: Compile selected LuCI apps
       id: compile
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        # 编译工具链和依赖项
-        echo "Building toolchain and dependencies..."
-        make defconfig
-        make toolchain/install -j$(nproc)
-        make package/lua/compile -j$(nproc)
         # 提取所有选中的 luci-app-* 插件
         LUCI_APPS=$(grep '^CONFIG_PACKAGE_luci-app-' .config | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//g')
         if [ -z "$LUCI_APPS" ]; then
