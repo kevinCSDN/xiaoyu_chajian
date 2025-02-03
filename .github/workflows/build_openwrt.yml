@@ -143,12 +143,19 @@ jobs:
     - name: Compile selected LuCI apps
       id: compile
       run: |
-        cd openwrt
+        cd openwrt  # 确保切换到 openwrt 目录
         echo -e "$(nproc) thread compile"
+        # 检查 .config 文件是否存在
+        if [ ! -f .config ]; then
+          echo "Error: .config file not found!"
+          exit 1
+        fi
         # 提取所有选中的 luci-app-* 插件
-        LUCI_APPS=$(grep -oP '^CONFIG_PACKAGE_luci-app-\w+=\K.*' .config | sed 's/y//g')
+        LUCI_APPS=$(grep '^CONFIG_PACKAGE_luci-app-' .config | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//g')
         if [ -z "$LUCI_APPS" ]; then
           echo "No LuCI apps selected in .config!"
+          echo "Current .config content:"
+          cat .config  # 打印文件内容以确认
           exit 1
         fi
         echo "Selected LuCI apps: $LUCI_APPS"
@@ -158,11 +165,7 @@ jobs:
           make package/$app/compile -j$(nproc) || make package/$app/compile -j1 || make package/$app/compile -j1 V=s
         done
         echo "::set-output name=status::success"
-        
-    - name: Check space usage
-      if: (!cancelled())
-      run: df -hT
-
+    
     - name: Upload .ipk files
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && !cancelled()
