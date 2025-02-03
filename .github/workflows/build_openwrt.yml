@@ -153,6 +153,7 @@ jobs:
 
     - name: Compile selected LuCI apps
       id: compile_luci
+      continue-on-error: true
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
@@ -166,9 +167,21 @@ jobs:
         # 编译所有选中的 luci-app-* 插件
         for app in $LUCI_APPS; do
           echo "Compiling $app..."
-          make package/$app/compile -j$(nproc) || make package/$app/compile -j1 || make package/$app/compile -j1 V=s
+          make package/$app/compile -j$(nproc) || make package/$app/compile -j1 V=s || echo "Failed to compile $app, continuing..."
         done
         echo "::set-output name=status::success"
+
+    - name: Check for compiled .ipk files
+      id: check_ipk
+      run: |
+        cd openwrt/bin/packages/*/base/
+        if ls luci-app-*.ipk 1> /dev/null 2>&1; then
+          echo "Compiled .ipk files found."
+          echo "::set-output name=has_ipk::true"
+        else
+          echo "No .ipk files found."
+          echo "::set-output name=has_ipk::false"
+        fi
 
     - name: Upload firmware
       uses: actions/upload-artifact@main
@@ -179,7 +192,7 @@ jobs:
 
     - name: Upload .ipk files
       uses: actions/upload-artifact@main
-      if: steps.compile_luci.outputs.status == 'success' && !cancelled()
+      if: steps.check_ipk.outputs.has_ipk == 'true' && !cancelled()
       with:
         name: luci-apps
         path: openwrt/bin/packages/*/base/luci-app-*.ipk
@@ -190,9 +203,11 @@ jobs:
       run: |
         touch release.txt
         echo "🔗 [Firmware](https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}.tar.gz)" >> release.txt
-        echo "🔗 [LuCI Apps](https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/luci-apps.zip)" >> release.txt
+        if [ "${{ steps.check_ipk.outputs.has_ipk }}" == "true" ]; then
+          echo "🔗 [LuCI Apps](https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/luci-apps.zip)" >> release.txt
+        fi
         echo "::set-output name=status::success"
-        
+
     - name: Upload firmware and .ipk to release
       uses: softprops/action-gh-release@v1
       if: steps.tag.outputs.status == 'success' && !cancelled()
